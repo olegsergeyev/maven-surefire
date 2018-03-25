@@ -22,8 +22,10 @@ package org.apache.maven.plugin.surefire.report;
 import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FilterOutputStream;
 import java.io.IOException;
-import java.io.OutputStream;
+import java.util.concurrent.atomic.AtomicStampedReference;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.maven.surefire.report.ReportEntry;
 
@@ -44,9 +46,12 @@ public class ConsoleOutputFileReporter
 
     private final String reportNameSuffix;
 
-    private String reportEntryName;
+    private final AtomicStampedReference<FilterOutputStream> fileOutputStream =
+            new AtomicStampedReference<FilterOutputStream>( null, 0 );
 
-    private OutputStream fileOutputStream;
+    private final ReentrantLock lock = new ReentrantLock();
+
+    private String reportEntryName;
 
     public ConsoleOutputFileReporter( File reportsDirectory, String reportNameSuffix )
     {
@@ -57,7 +62,7 @@ public class ConsoleOutputFileReporter
     @Override
     public void testSetStarting( ReportEntry reportEntry )
     {
-        close();
+        close( true );
         reportEntryName = reportEntry.getName();
     }
 
@@ -67,53 +72,71 @@ public class ConsoleOutputFileReporter
     }
 
     @Override
-    @SuppressWarnings( "checkstyle:emptyblock" )
     public void close()
     {
-        if ( fileOutputStream != null )
-        {
-            //noinspection EmptyCatchBlock
-            try
-            {
-                fileOutputStream.flush();
-            }
-            catch ( IOException e )
-            {
-            }
-            finally
-            {
-                try
-                {
-                    fileOutputStream.close();
-                }
-                catch ( IOException ignored )
-                {
-                }
-            }
-            fileOutputStream = null;
-        }
+        // The close() method is called in main Thread T2.
+        close( false );
     }
 
     @Override
     public void writeTestOutput( byte[] buf, int off, int len, boolean stdout )
     {
+        lock.lock();
         try
         {
-            if ( fileOutputStream == null )
+            // This method is called in single thread T1 per fork JVM (see ThreadedStreamConsumer).
+            // The close() method is called in main Thread T2.
+            int[] stamp = {0};
+            FilterOutputStream os = fileOutputStream.get( stamp );
+            if ( stamp[0] != 2 )
             {
-                if ( !reportsDirectory.exists() )
+                if ( os == null )
                 {
-                    //noinspection ResultOfMethodCallIgnored
-                    reportsDirectory.mkdirs();
+                    if ( !reportsDirectory.exists() )
+                    {
+                        //noinspection ResultOfMethodCallIgnored
+                        reportsDirectory.mkdirs();
+                    }
+                    File file = getReportFile( reportsDirectory, reportEntryName, reportNameSuffix, "-output.txt" );
+                    os = new BufferedOutputStream( new FileOutputStream( file ), 16 * 1024 );
+                    fileOutputStream.set( os, 0 );
                 }
-                File file = getReportFile( reportsDirectory, reportEntryName, reportNameSuffix, "-output.txt" );
-                fileOutputStream = new BufferedOutputStream( new FileOutputStream( file ), 16 * 1024 );
+                os.write( buf, off, len );
             }
-            fileOutputStream.write( buf, off, len );
         }
         catch ( IOException e )
         {
             throw new RuntimeException( e );
+        }
+        finally
+        {
+            lock.unlock();
+        }
+    }
+
+    @SuppressWarnings( "checkstyle:emptyblock" )
+    private void close( boolean closeReattempt )
+    {
+        lock.lock();
+        try
+        {
+            int[] stamp = {0};
+            FilterOutputStream os = fileOutputStream.get( stamp );
+            if ( stamp[0] != 2 )
+            {
+                fileOutputStream.set( null, closeReattempt ? 1 : 2 );
+                if ( os != null && stamp[0] == 0 )
+                {
+                    os.close();
+                }
+            }
+        }
+        catch ( IOException ignored )
+        {
+        }
+        finally
+        {
+            lock.unlock();
         }
     }
 }
