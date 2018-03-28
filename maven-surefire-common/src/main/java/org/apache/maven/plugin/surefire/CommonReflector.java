@@ -66,7 +66,7 @@ public class CommonReflector
         Object[] params = { src, logger };
         return instantiateObject( DefaultReporterFactory.class.getName(), args, params, surefireClassLoader );
     }
-
+    //comment
     private Object createStartupReportConfiguration( @Nonnull StartupReportConfiguration reporterConfiguration )
     {
         Constructor<?> constructor = getConstructor( startupReportConfiguration, boolean.class, boolean.class,
@@ -83,5 +83,5 @@ public class CommonReflector
             reporterConfiguration.getEncoding().name() };
         return newInstance( constructor, params );
     }
-
+//comment
 }
