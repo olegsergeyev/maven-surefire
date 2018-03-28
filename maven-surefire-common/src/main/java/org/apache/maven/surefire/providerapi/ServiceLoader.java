@@ -59,7 +59,7 @@ public final class ServiceLoader
                 implementations.add( (T) getConstructor( implClass ).newInstance() );
             }
             return implementations;
-        }
+        } // new comment
         catch ( IOException e )
         {
             throw new IllegalStateException( e.getLocalizedMessage(), e );
